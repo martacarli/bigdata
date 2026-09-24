@@ -141,6 +141,7 @@ download_resumable <- function(url, dest, size = NA_real_) {
 
 # Pick the release file that holds most_popular.csv.
 choose_trending_file <- function(files) {
+  if (nrow(files) == 1) return(files)   # only one candidate: that's it
   stem <- sub("\\.csv$", "", TRENDING_MEMBER)
   direct <- files[grepl(stem, name, ignore.case = TRUE)]
   if (nrow(direct) == 1) return(direct)
@@ -166,6 +167,10 @@ if (OFFLINE || length(local)) {
   message("Files in the release:")
   print(files[, .(name, size = fmt_gb(size))])
   pick <- choose_trending_file(files)
+  # Links like ".../get" give no usable file name; use a fixed one.
+  if (is.na(pick$name) || !nzchar(pick$name) || pick$name %in% c("get", "download")) {
+    pick$name <- "trending_release"
+  }
   message("Chosen: ", pick$name, " (", fmt_gb(pick$size), ")")
   if (LIST_ONLY) {
     sb <- rbindlist(lapply(paste0(SB_MIRROR_URL, SB_FILES), remote_file_info))

@@ -187,8 +187,27 @@ stream_filter_csv <- function(con, filter_col, filter_value, keep_cols,
 
 # Open a read connection to a CSV that may sit inside an archive, without
 # extracting the archive to disk.
+# Work out a file's type from its first bytes. Download services sometimes
+# hand files out without a name or extension (e.g. ".../get").
+sniff_type <- function(path) {
+  b <- readBin(path, "raw", 262)
+  starts <- function(hex) length(b) >= length(hex) && all(b[seq_along(hex)] == as.raw(hex))
+  if (starts(c(0x50, 0x4B, 0x03, 0x04))) return("zip")
+  if (starts(c(0x1F, 0x8B)))             return("gz")
+  if (starts(c(0x37, 0x7A, 0xBC, 0xAF))) return("7z")
+  if (starts(c(0x42, 0x5A, 0x68)))       return("bz2")
+  if (starts(c(0xFD, 0x37, 0x7A, 0x58))) return("xz")
+  if (length(b) >= 262 && rawToChar(b[258:262]) == "ustar") return("tar")
+  "csv"
+}
+
 open_member_stream <- function(path, member) {
   p <- tolower(path)
+  if (!grepl("\\.(zip|tar|tgz|gz|bz2|xz|7z|csv)$", p)) {
+    type <- sniff_type(path)
+    message(basename(path), " has no known extension; its contents look like: ", type)
+    p <- paste0(p, ".", type)   # only used to pick the reader below
+  }
   if (grepl("\\.zip$", p)) {
     entries <- utils::unzip(path, list = TRUE)$Name   # reads the index only
     m <- entries[basename(entries) == member]
