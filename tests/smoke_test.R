@@ -12,25 +12,25 @@ raw <- file.path(tmp, "data", "raw")
 
 # ---- Trending fixture ----------------------------------------------------------
 tr <- data.table(
-  snapshot_time     = c("2023-01-01T00:00:00Z", "2023-01-01T06:00:00Z", "2023-01-02T00:00:00Z",
+  collection_date   = c("2023-01-01T00:00:00Z", "2023-01-01T06:00:00Z", "2023-01-02T00:00:00Z",
                         "2023-01-02T00:00:00Z", "2023-01-03T00:00:00Z", "2023-01-01T00:00:00Z"),
   region_code       = c("US", "US", "US", "US", "US", "GB"),
   rank              = c(5, 2, 10, 1, 50, 3),
   video_id          = c("AAAAAAAAAAA", "AAAAAAAAAAA", "BBBBBBBBBBB", "CCCCCCCCCCC", "DDDDDDDDDDD", "EEEEEEEEEEE"),
-  video_title       = c("Video A, \"quoted\"", "Video A renamed", "Video B", "Video C", "Video D", "Video E"),
-  video_description = c("line one\nline two, with comma\n\"quote\" here", "x", "",
+  title             = c("Video A, \"quoted\"", "Video A renamed", "Video B", "Video C", "Video D", "Video E"),
+  description       = c("line one\nline two, with comma\n\"quote\" here", "x", "",
                         "multi\r\nline\r\nUS", "d", "mentions US and\nnewline"),
   channel_title     = c("Chan A", "Chan A", "Chan B", "Chan C", "Chan D", "Chan E"),
   channel_id        = paste0("UC", 1:6),
-  video_category_id = c("28", "28", "24", "20", "10", "22"),
+  category_id       = c("28", "28", "24", "20", "10", "22"),
   video_tags        = c("a,b,\"c\"", "", "t", "t", "t", "t"),
-  video_view_count  = c(100, 500, 20, 7, 9, 1)
+  view_count        = c(100, 500, 20, 7, 9, 1)
 )
 # Filler rows from other countries, many with multi-line text, to cross chunk edges.
 set.seed(1)
 filler <- tr[rep(6, 300)][, `:=`(region_code = sample(c("GB", "FR", "DE"), .N, TRUE),
                                  video_id = sprintf("F%010d", .I),
-                                 video_description = paste0("filler ", .I, "\nsecond line, \"q\""))]
+                                 description = paste0("filler ", .I, "\nsecond line, \"q\""))]
 tr <- rbind(filler[1:150], tr, filler[151:300])
 # Same layout as the real release: a zip holding a .tar.bz2 holding the CSV,
 # next to other files, including a decoy with a similar name.

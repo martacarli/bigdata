@@ -42,7 +42,7 @@ CHUNK_LINES     <- as.integer(Sys.getenv("YTSB_CHUNK_LINES", "250000"))  # lines
 # (case-insensitive). If 01_download.R stops with "missing columns", look at
 # the header it prints and add the right name at the front of the list.
 TRENDING_COLS <- list(
-  snapshot_time = c("snapshot_time", "snapshot_timestamp", "timestamp", "trending_time",
+  snapshot_time = c("collection_date", "snapshot_time", "snapshot_timestamp", "timestamp", "trending_time",
                     "collection_time", "collected_at", "snapshot_date", "trending_date",
                     "datetime", "date"),
   region        = c("region_code", "country_code", "country", "region"),
@@ -100,8 +100,15 @@ parse_time <- function(x) {
   }
   x <- sub("Z$", "", sub("T", " ", x))
   x <- sub("([+-][0-9]{2}:?[0-9]{2})$", "", x)   # drop offsets, data is UTC
-  as.POSIXct(x, tz = "UTC",
-             tryFormats = c("%Y-%m-%d %H:%M:%OS", "%Y-%m-%d %H:%M", "%Y-%m-%d"))
+  # Try the most detailed format first and only fill what is still missing,
+  # so a mix of "date" and "date time" values keeps the times.
+  out <- as.POSIXct(rep(NA_real_, length(x)), origin = "1970-01-01", tz = "UTC")
+  for (f in c("%Y-%m-%d %H:%M:%OS", "%Y-%m-%d %H:%M", "%Y-%m-%d")) {
+    miss <- is.na(out) & !is.na(x)
+    if (!any(miss)) break
+    out[miss] <- as.POSIXct(x[miss], format = f, tz = "UTC")
+  }
+  out
 }
 
 # fread keeps CSV-escaped quotes doubled ("" instead of "). Undo that in
