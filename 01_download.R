@@ -17,6 +17,11 @@ suppressPackageStartupMessages(library(curl))
 
 # ---- Remote helpers ---------------------------------------------------------
 
+# Some servers refuse requests that do not look like a browser (HTTP 403),
+# so every request sends a normal browser user agent.
+UA <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+http_handle <- function(...) new_handle(useragent = UA, followlocation = TRUE, ...)
+
 # Name and size of a remote file, asked from the server without downloading.
 remote_file_info <- function(url) {
   last_headers <- function(res) {
@@ -25,7 +30,7 @@ remote_file_info <- function(url) {
     setNames(sub("^[^:]+:\\s*", "", h), tolower(sub(":.*$", "", h)))
   }
   size <- NA_real_; name <- NA_character_; final_url <- url
-  res <- tryCatch(curl_fetch_memory(url, new_handle(nobody = TRUE, followlocation = TRUE)),
+  res <- tryCatch(curl_fetch_memory(url, http_handle(nobody = TRUE)),
                   error = function(e) NULL)
   if (!is.null(res) && res$status_code < 400) {
     h <- last_headers(res); final_url <- res$url
@@ -34,7 +39,7 @@ remote_file_info <- function(url) {
   }
   if (is.na(size)) {
     # Some storage backends refuse HEAD; ask for one byte and read the total.
-    res <- tryCatch(curl_fetch_memory(url, new_handle(range = "0-0", followlocation = TRUE)),
+    res <- tryCatch(curl_fetch_memory(url, http_handle(range = "0-0")),
                     error = function(e) NULL)
     if (!is.null(res)) {
       h <- last_headers(res); final_url <- res$url
@@ -56,14 +61,23 @@ remote_file_info <- function(url) {
 list_databank_files <- function(dataset_url) {
   base <- sub("^(https?://[^/]+).*", "\\1", dataset_url)
   urls <- character(0)
-  js <- tryCatch(jsonlite::fromJSON(paste0(dataset_url, ".json")), error = function(e) NULL)
+  js <- tryCatch({
+    res <- curl_fetch_memory(paste0(dataset_url, ".json"), http_handle())
+    if (res$status_code == 200) jsonlite::fromJSON(rawToChar(res$content)) else NULL
+  }, error = function(e) NULL)
   if (!is.null(js) && !is.null(js$datafiles) && length(js$datafiles)) {
     df <- as.data.table(js$datafiles)
     idcol <- intersect(c("web_id", "id"), names(df))[1]
     if (!is.na(idcol)) urls <- sprintf("%s/datafiles/%s/download", base, df[[idcol]])
   }
   if (!length(urls)) {
-    html <- rawToChar(curl_fetch_memory(dataset_url)$content)
+    res <- curl_fetch_memory(dataset_url, http_handle())
+    if (res$status_code != 200) {
+      stop("The dataset page answered HTTP ", res$status_code, ". Open ", dataset_url,
+           " in your browser, copy the download link of the file that contains ",
+           TRENDING_MEMBER, " and run again with YTSB_TRENDING_URL set to it.", call. = FALSE)
+    }
+    html <- rawToChar(res$content)
     links <- regmatches(html, gregexpr("/datafiles/[A-Za-z0-9_-]+/download", html))[[1]]
     urls <- paste0(base, unique(links))
   }
@@ -95,7 +109,7 @@ download_resumable <- function(url, dest, size = NA_real_) {
     return(invisible(dest))
   }
   part <- paste0(dest, ".part")
-  h <- new_handle(followlocation = TRUE, failonerror = TRUE)
+  h <- http_handle(failonerror = TRUE)
   if (file.exists(part)) {
     message("Resuming ", basename(dest), " from ", fmt_gb(file.size(part)))
     handle_setopt(h, resume_from_large = file.size(part))
