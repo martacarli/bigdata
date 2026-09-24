@@ -15,6 +15,8 @@ R 4.1 or newer, plus:
 install.packages(c("data.table", "curl", "jsonlite"))
 ```
 
+The big CSV reads go through [DuckDB](https://duckdb.org), because the trending file has messy quoting that `fread` can't handle when it's read in pieces. You don't need to install it: if the `duckdb` program isn't on your computer, `01_download.R` downloads the stand-alone program (about 17 MB) into `tools/` the first time it runs.
+
 You also need the command line tool `unzip`, which macOS and Linux already have. If the release comes as `.7z` you need 7-Zip installed as well. On Windows the scripts fall back to R's own `unz()` for zip files, and that should work too.
 
 ## Run order
@@ -31,7 +33,7 @@ Rscript 03_match.R      # join, report, write the CSVs
 
 ### What each step does
 
-**01_download.R** first reads the list of files in the Illinois release, together with their sizes, and prints it. It then downloads only the file that contains `most_popular.csv`. When that file is an archive, the script reads the CSV straight out of it without unpacking anything to disk, keeps the US rows and only the columns we need, and saves them to `data/interim/us_trending_rows.rds`. After that it downloads the two SponsorBlock files. Every download resumes if it gets interrupted, is skipped if the file is already there, and is made read-only once it finishes.
+**01_download.R** first reads the list of files in the Illinois release, together with their sizes, and prints it. It then downloads only the file that contains `most_popular.csv`. The release is a zip holding a `.tar.bz2` holding `most_popular.csv`. The script reads the CSV straight through both layers without unpacking anything to disk, working out from a small sample whether quotes are escaped as `""` or `\"`, keeps the US rows and only the columns we need, and saves them to `data/interim/us_trending_rows.rds`. After that it downloads the two SponsorBlock files. Every download resumes if it gets interrupted, is skipped if the file is already there, and is made read-only once it finishes.
 
 **If a file is bigger than 30 GB the script stops before downloading it and tells you the size.** To go ahead anyway, run it again with:
 

@@ -182,9 +182,17 @@ trending_path <- file.path(RAW_DIR, pick$name)
 
 keep_cols <- c("snapshot_time", "region", "rank", "video_id", "title", "description",
                "channel_title", "channel_id", "category", "views")
-con <- open_member_stream(trending_path, TRENDING_MEMBER)
-us_rows <- tryCatch(stream_filter_csv(con, "region", REGION, keep_cols),
-                    finally = close(con))
+duck <- get_duckdb()
+if (!is.na(duck)) {
+  us_rows <- extract_rows_duckdb(duck, member_stream_parts(trending_path, TRENDING_MEMBER),
+                                 "region", REGION, keep_cols,
+                                 file.path(INTERIM_DIR, "us_trending_rows.csv"))
+  file.remove(file.path(INTERIM_DIR, "us_trending_rows.csv"))
+} else {
+  con <- open_member_stream(trending_path, TRENDING_MEMBER)
+  us_rows <- tryCatch(stream_filter_csv(con, "region", REGION, keep_cols),
+                      finally = close(con))
+}
 if (!nrow(us_rows)) stop("No rows with region == '", REGION, "'. See the region values printed above.")
 message(sprintf("Kept %s %s rows.", format(nrow(us_rows), big.mark = ","), REGION))
 saveRDS(us_rows, file.path(INTERIM_DIR, "us_trending_rows.rds"))

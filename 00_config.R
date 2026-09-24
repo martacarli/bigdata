@@ -234,7 +234,13 @@ tar_member_cmd <- function(name, member) {
 
 is_tar_name <- function(x) grepl("\\.(tar|tar\\.gz|tgz|tar\\.bz2|tbz2?|tar\\.xz|txz)$", tolower(x))
 
-open_member_stream <- function(path, member) {
+# Shell commands that write the CSV we need to stdout, without unpacking
+# anything to disk. Returns list(src, post, total): `src` produces the bytes
+# we measure for progress (`total` of them, NA if unknown), `post` (may be
+# "") turns them into CSV text, e.g. release.zip -> youtube_trends.tar.bz2
+# -> most_popular.csv is src = "unzip -p ... inner", post = "tar -x ...".
+member_stream_parts <- function(path, member) {
+  q <- shQuote(path)
   p <- tolower(path)
   if (!grepl("\\.(zip|tar|tgz|gz|bz2|xz|7z|csv)$", p)) {
     type <- sniff_type(path)
@@ -242,42 +248,186 @@ open_member_stream <- function(path, member) {
     p <- paste0(p, ".", type)   # only used to pick the reader below
   }
   if (grepl("\\.zip$", p)) {
-    entries <- utils::unzip(path, list = TRUE)$Name   # reads the index only
-    m <- entries[basename(entries) == member]
-    if (length(m)) {
-      message("Streaming '", m[1], "' out of ", basename(path))
-      # `unzip -p` handles zip64 (>4 GB) archives; fall back to R's unz().
-      if (nzchar(Sys.which("unzip"))) {
-        return(pipe(paste("unzip -p", shQuote(path), shQuote(m[1])), "r"))
-      }
-      return(unz(path, m[1], "r"))
+    if (!nzchar(Sys.which("unzip"))) stop("Needs the `unzip` command line tool.")
+    idx <- utils::unzip(path, list = TRUE)   # reads the zip's index only
+    hit <- idx[basename(idx$Name) == member, ]
+    if (nrow(hit)) {
+      message("Streaming '", hit$Name[1], "' out of ", basename(path))
+      return(list(src = paste("unzip -p", q, shQuote(hit$Name[1])), post = "",
+                  total = hit$Length[1]))
     }
-    # Not there directly: look inside a tar archive packed in the zip, e.g.
-    # release.zip -> youtube_trends.tar.bz2 -> most_popular.csv. Both layers
-    # are decompressed on the fly; nothing is written to disk.
-    inner <- entries[is_tar_name(entries)]
-    if (!length(inner)) stop(member, " not in ", path, ". Entries: ", paste(entries, collapse = ", "))
-    if (!nzchar(Sys.which("unzip"))) stop("Nested archive: needs the `unzip` command line tool.")
-    message("Streaming '", member, "' out of '", inner[1], "' inside ", basename(path),
+    # Not there directly: look inside a tar archive packed in the zip.
+    inner <- idx[is_tar_name(idx$Name), ]
+    if (!nrow(inner)) stop(member, " not in ", path, ". Entries: ", paste(idx$Name, collapse = ", "))
+    message("Streaming '", member, "' out of '", inner$Name[1], "' inside ", basename(path),
             " (one pass, nothing unpacked to disk)")
-    if (grepl("bz2$", inner[1]) && !nzchar(Sys.which("lbzip2"))) {
-      message("Tip: installing lbzip2 makes this faster (on Colab: system('apt-get -qq install -y lbzip2')).")
-    }
-    return(pipe(paste("unzip -p", shQuote(path), shQuote(inner[1]), "|",
-                      tar_member_cmd(inner[1], member)), "r"))
+    return(list(src = paste("unzip -p", q, shQuote(inner$Name[1])),
+                post = tar_member_cmd(inner$Name[1], member), total = inner$Length[1]))
   }
   if (is_tar_name(p)) {
-    message("Streaming '", member, "' out of ", basename(path))
-    return(pipe(paste("cat", shQuote(path), "|", tar_member_cmd(p, member)), "r"))
+    return(list(src = paste("cat", q), post = tar_member_cmd(p, member), total = file.size(path)))
   }
   if (grepl("\\.7z$", p)) {
     if (!nzchar(Sys.which("7z"))) stop("7z archive: install 7-Zip and put `7z` on PATH.")
-    return(pipe(paste("7z e -so", shQuote(path), shQuote(member)), "r"))
+    return(list(src = paste("7z e -so", q, shQuote(member)), post = "", total = NA_real_))
   }
-  if (grepl("\\.gz$", p))  return(gzfile(path, "r"))
-  if (grepl("\\.bz2$", p)) return(bzfile(path, "r"))
-  if (grepl("\\.xz$", p))  return(xzfile(path, "r"))
-  file(path, "r")
+  dec <- c(gz = "gzip -dc", bz2 = if (nzchar(Sys.which("lbzip2"))) "lbzip2 -dc" else "bzip2 -dc",
+           xz = "xz -dc")
+  ext <- sub(".*\\.", "", p)
+  list(src = paste("cat", q), post = if (ext %in% names(dec)) dec[[ext]] else "",
+       total = file.size(path))
+}
+
+stream_cmd <- function(parts) {
+  if (nzchar(parts$post)) paste(parts$src, "|", parts$post) else parts$src
+}
+
+# Kept for the rare case DuckDB is not available: an R connection to the CSV.
+open_member_stream <- function(path, member) {
+  pipe(stream_cmd(member_stream_parts(path, member)), "r")
+}
+
+# ---- DuckDB (used for the big CSV reads) ------------------------------------
+# DuckDB's CSV reader copes with messy quoting and can skip a broken row
+# instead of stopping, which fread on text chunks cannot. We use the
+# stand-alone DuckDB program (one file, ~17 MB). If it is not installed it is
+# downloaded once into tools/ from DuckDB's GitHub releases.
+DUCKDB_VERSION <- "v1.3.2"
+
+get_duckdb <- function() {
+  if (identical(Sys.getenv("YTSB_ENGINE"), "r")) return(NA_character_)
+  p <- Sys.which("duckdb")
+  if (nzchar(p)) return(unname(p))
+  win <- .Platform$OS.type == "windows"
+  exe <- file.path("tools", if (win) "duckdb.exe" else "duckdb")
+  if (file.exists(exe)) return(normalizePath(exe))
+  sys <- Sys.info()[["sysname"]]; mach <- Sys.info()[["machine"]]
+  asset <- if (sys == "Linux" && mach %in% c("x86_64", "amd64")) "duckdb_cli-linux-amd64.zip"
+           else if (sys == "Linux" && mach %in% c("aarch64", "arm64")) "duckdb_cli-linux-arm64.zip"
+           else if (sys == "Darwin") "duckdb_cli-osx-universal.zip"
+           else if (win) "duckdb_cli-windows-amd64.zip" else NA_character_
+  if (is.na(asset)) return(NA_character_)
+  dir.create("tools", showWarnings = FALSE)
+  z <- file.path("tools", asset)
+  url <- sprintf("https://github.com/duckdb/duckdb/releases/download/%s/%s", DUCKDB_VERSION, asset)
+  message("Getting DuckDB ", DUCKDB_VERSION, " (one-time download into tools/)")
+  ok <- tryCatch(utils::download.file(url, z, mode = "wb", quiet = TRUE) == 0,
+                 error = function(e) FALSE)
+  if (!ok) { message("Could not download DuckDB; falling back to the R reader."); return(NA_character_) }
+  utils::unzip(z, exdir = "tools"); file.remove(z)
+  Sys.chmod(exe, "0755")
+  normalizePath(exe)
+}
+
+# Run SQL with DuckDB, optionally feeding it a shell command's output as
+# /dev/stdin. Returns the exit status.
+run_duckdb <- function(duck, sql, input_cmd = NULL, log = tempfile()) {
+  f <- tempfile(fileext = ".sql"); writeLines(sql, f)
+  cmd <- paste(shQuote(duck), "-f", shQuote(f))
+  if (!is.null(input_cmd)) cmd <- paste(input_cmd, "|", cmd)
+  system(paste("bash -c", shQuote(paste(cmd, "2>", shQuote(log)))))
+}
+
+sql_str <- function(x) paste0("'", gsub("'", "''", x, fixed = TRUE), "'")
+sql_id  <- function(x) paste0('"', gsub('"', '""', x, fixed = TRUE), '"')
+
+# Pull the rows of one region out of a huge CSV inside an archive.
+# 1. Read the first ~20 MB to get the header and see how quotes are escaped
+#    ("" or \"), because DuckDB cannot guess that reliably from a pipe.
+# 2. Stream everything through DuckDB, keeping only the needed columns and
+#    rows. Progress is printed every 30 s from `dd`, which counts the bytes.
+extract_rows_duckdb <- function(duck, parts, filter_col, filter_value, keep_cols, out_csv) {
+  work <- file.path(INTERIM_DIR, "_extract"); dir.create(work, showWarnings = FALSE)
+  sample <- file.path(work, "sample.csv")
+  system(paste("bash -c", shQuote(paste(stream_cmd(parts), "2>/dev/null | head -c 20000000 >",
+                                        shQuote(sample)))))
+  if (!file.exists(sample) || file.size(sample) == 0) {
+    stop("Nothing came out of the archive. The file we need may have another name; ",
+         "check dataset_info.txt in the release.", call. = FALSE)
+  }
+  header_line <- readLines(sample, n = 1L, warn = FALSE, encoding = "UTF-8")
+  header <- names(fread(text = c(header_line, ""), header = TRUE, sep = ","))
+  message("Header found: ", paste(header, collapse = ", "))
+  cols <- resolve_columns(header)
+  message("Using columns: ", paste(sprintf("%s <- %s", names(cols), cols), collapse = "; "))
+  txt <- readChar(sample, file.size(sample), useBytes = TRUE)
+  n_match <- function(pat) sum(gregexpr(pat, txt, fixed = TRUE, useBytes = TRUE)[[1]] > 0)
+  n_bs <- n_match('\\"')
+  n_dq <- n_match('""')
+  escape <- if (n_bs > n_dq) "\\" else '"'
+  message(sprintf("Quotes inside text are escaped as %s (seen %d times vs %d for the other style).",
+                  if (escape == '"') '""' else '\\"', max(n_bs, n_dq), min(n_bs, n_dq)))
+  rm(txt); file.remove(sample)
+
+  keep <- cols[names(cols) %in% keep_cols]
+  select <- paste(sprintf("%s AS %s", sql_id(keep), sql_id(names(keep))), collapse = ", ")
+  rej_csv <- file.path(work, "rejected_count.csv")
+  sql <- c(
+    sprintf("COPY (SELECT %s FROM read_csv('/dev/stdin', header = true, delim = ',', quote = '\"', escape = %s, all_varchar = true, strict_mode = false, ignore_errors = true, store_rejects = true, max_line_size = 100000000) WHERE trim(%s) = %s) TO %s (HEADER, DELIMITER ',');",
+            select, sql_str(escape), sql_id(cols[[filter_col]]), sql_str(filter_value), sql_str(out_csv)),
+    sprintf("COPY (SELECT count(*) AS n FROM reject_errors) TO %s (HEADER);", sql_str(rej_csv))
+  )
+  sql_file <- file.path(work, "extract.sql"); writeLines(sql, sql_file)
+  prog <- file.path(work, "progress.log"); done <- file.path(work, "done.txt")
+  errlog <- file.path(work, "stderr.log")
+  for (f in c(prog, done, errlog)) if (file.exists(f)) file.remove(f)
+  gnu_dd <- system("dd status=progress if=/dev/null of=/dev/null 2>/dev/null") == 0
+  meter <- if (gnu_dd) paste("| dd bs=4M status=progress 2>", shQuote(prog)) else ""
+  pipeline <- paste(parts$src, "2>>", shQuote(errlog), meter,
+                    if (nzchar(parts$post)) paste("|", parts$post, "2>>", shQuote(errlog)) else "",
+                    "|", shQuote(duck), "-f", shQuote(sql_file), "2>>", shQuote(errlog),
+                    "; echo $? >", shQuote(done))
+  message("Reading the whole file now. This is the long step; progress every 30 seconds.")
+  t0 <- Sys.time(); last <- t0
+  system(paste("bash -c", shQuote(pipeline)), wait = FALSE)
+  repeat {
+    Sys.sleep(2)
+    if (file.exists(done)) break
+    if (difftime(Sys.time(), last, units = "secs") < 30) next
+    last <- Sys.time()
+    mins <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
+    got <- NA_real_
+    if (file.exists(prog)) {
+      lg <- readChar(prog, file.size(prog), useBytes = TRUE)
+      m <- regmatches(lg, gregexpr("[0-9]+ bytes", lg))[[1]]
+      if (length(m)) got <- as.numeric(sub(" bytes", "", m[length(m)]))
+    }
+    if (!is.na(got) && !is.na(parts$total) && got > 0) {
+      left <- mins / (got / parts$total) - mins
+      message(sprintf("  %s of %s read (%.0f%%), %.0f min so far, about %.0f min left",
+                      fmt_gb(got), fmt_gb(parts$total), 100 * got / parts$total, mins, left))
+    } else {
+      message(sprintf("  still reading, %.0f min so far", mins))
+    }
+  }
+  status <- as.integer(readLines(done, warn = FALSE)[1])
+  if (!identical(status, 0L) || !file.exists(out_csv)) {
+    stop("DuckDB stopped with an error. Last messages:\n",
+         paste(tail(readLines(errlog, warn = FALSE), 15), collapse = "\n"), call. = FALSE)
+  }
+  n_rej <- if (file.exists(rej_csv)) fread(rej_csv)$n else NA
+  if (!is.na(n_rej) && n_rej > 0) message(n_rej, " malformed rows were skipped (out of the whole file).")
+  out <- fread(out_csv, colClasses = "character", na.strings = c("", "NA"), encoding = "UTF-8")
+  unlink(work, recursive = TRUE)
+  undouble_quotes(out)
+}
+
+# Read selected columns of a big CSV: fread first (fast), DuckDB if fread
+# chokes on the file's quoting.
+read_csv_robust <- function(path, select) {
+  tryCatch(fread(path, select = select, colClasses = "character", showProgress = FALSE),
+    error = function(e) {
+      duck <- get_duckdb()
+      if (is.na(duck)) stop(e)
+      message("fread could not read ", basename(path), " (", conditionMessage(e), "); using DuckDB.")
+      tmp <- tempfile(fileext = ".csv")
+      sql <- sprintf("COPY (SELECT %s FROM read_csv(%s, all_varchar = true, ignore_errors = true)) TO %s (HEADER);",
+                     paste(sql_id(select), collapse = ", "), sql_str(normalizePath(path)), sql_str(tmp))
+      if (run_duckdb(duck, sql) != 0) stop("DuckDB could not read ", path, call. = FALSE)
+      out <- undouble_quotes(fread(tmp, colClasses = "character"))
+      file.remove(tmp)
+      out
+    })
 }
 
 fmt_gb <- function(bytes) sprintf("%.2f GB", bytes / 1e9)

@@ -63,10 +63,9 @@ if (length(setdiff(needed, sb_header))) {
 }
 sel <- intersect(wanted, sb_header)
 message("Reading ", sb_path, " (columns: ", paste(sel, collapse = ", "), ")")
-sb <- fread(sb_path, select = sel, showProgress = TRUE,
-            colClasses = list(character = intersect(c("videoID", "category", "actionType", "service"), sel),
-                              numeric   = intersect(c("startTime", "endTime", "votes",
-                                                      "hidden", "shadowHidden"), sel)))
+sb <- read_csv_robust(sb_path, sel)
+num <- intersect(c("startTime", "endTime", "votes", "hidden", "shadowHidden"), sel)
+sb[, (num) := lapply(.SD, as.numeric), .SDcols = num]
 n_raw <- nrow(sb)
 
 # Keep what the SponsorBlock extension itself would show: YouTube only,
@@ -119,7 +118,7 @@ rm(sb, seg, merged); invisible(gc())
 # ---- c) SponsorBlock video info (only to sanity-check the join) ----------------
 vi_path <- file.path(RAW_DIR, "videoInfo.csv")
 vi_cols <- intersect(c("videoID", "channelID", "title", "published"), names(fread(vi_path, nrows = 0)))
-vinfo <- fread(vi_path, select = vi_cols, colClasses = "character", showProgress = TRUE)
+vinfo <- read_csv_robust(vi_path, vi_cols)
 vinfo <- undouble_quotes(unique(vinfo[videoID %chin% videos$video_id], by = "videoID"))
 setnames(vinfo, setdiff(vi_cols, "videoID"), paste0("sb_", setdiff(vi_cols, "videoID")))
 saveRDS(vinfo, file.path(INTERIM_DIR, "sb_video_info.rds"))

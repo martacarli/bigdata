@@ -37,6 +37,11 @@ tr <- rbind(filler[1:150], tr, filler[151:300])
 rel <- file.path(tmp, "release"); inner <- file.path(tmp, "youtube_trends")
 dir.create(rel); dir.create(inner)
 fwrite(tr, file.path(inner, "most_popular.csv"), quote = TRUE)
+# A malformed row (stray quotes inside a quoted field), as found in the real
+# file. It is a GB row, so whether it is skipped or recovered, the US counts
+# below must not change and the pipeline must not stop.
+cat('2023-01-05T00:00:00Z,GB,9,ZZZZZZZZZZZ,"bad "quote" here",desc,Chan Z,UCz,22,t,5\n',
+    file = file.path(inner, "most_popular.csv"), append = TRUE)
 fwrite(tr[1:3][, region_code := "US"], file.path(inner, "old_most_popular.csv"))   # decoy
 writeLines("other table", file.path(inner, "channels.csv"))
 old <- setwd(tmp)
