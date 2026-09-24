@@ -31,6 +31,7 @@ SB_FILES      <- c("sponsorTimes.csv", "videoInfo.csv")
 MAX_DOWNLOAD_GB <- 30      # anything bigger stops and asks (see README)
 ALLOW_LARGE     <- isTRUE(as.logical(Sys.getenv("YTSB_ALLOW_LARGE", "FALSE")))
 OFFLINE         <- isTRUE(as.logical(Sys.getenv("YTSB_OFFLINE", "FALSE")))
+LIST_ONLY       <- isTRUE(as.logical(Sys.getenv("YTSB_LIST_ONLY", "FALSE")))  # show sizes, download nothing
 REGION          <- "US"
 SEED            <- 20564   # used wherever we sample (example titles)
 CHUNK_LINES     <- as.integer(Sys.getenv("YTSB_CHUNK_LINES", "250000"))  # lines per read

@@ -8,6 +8,7 @@
 # Any file above MAX_DOWNLOAD_GB (30 GB) stops the script. To go ahead after
 # checking, re-run with the environment variable YTSB_ALLOW_LARGE=TRUE.
 # Downloads resume if interrupted. Files already in data/raw are not fetched again.
+# To only see file sizes first, run with YTSB_LIST_ONLY=TRUE.
 #
 # Output: data/interim/us_trending_rows.rds (every US snapshot row, needed columns only)
 
@@ -145,6 +146,14 @@ if (OFFLINE) {
   print(files[, .(name, size = fmt_gb(size))])
   pick <- choose_trending_file(files)
   message("Chosen: ", pick$name, " (", fmt_gb(pick$size), ")")
+  if (LIST_ONLY) {
+    sb <- rbindlist(lapply(paste0(SB_MIRROR_URL, SB_FILES), remote_file_info))
+    message("SponsorBlock files:")
+    print(sb[, .(name, size = fmt_gb(size))])
+    message("List-only mode: nothing downloaded.")
+    # Stop here. In RStudio this ends source() without closing R.
+    if (interactive()) invokeRestart("abort") else quit(save = "no")
+  }
   check_size(pick$size, pick$name)
   download_resumable(pick$url, file.path(RAW_DIR, pick$name), pick$size)
 }
