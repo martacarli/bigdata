@@ -22,30 +22,25 @@ suppressPackageStartupMessages(library(curl))
 UA <- "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 http_handle <- function(...) new_handle(useragent = UA, followlocation = TRUE, ...)
 
-# Name and size of a remote file, asked from the server without downloading.
+# Name and size of a remote file, read from the response headers only.
+# We open the connection, look at the headers and hang up, so nothing is
+# downloaded even if the server ignores HEAD or Range requests.
 remote_file_info <- function(url) {
-  last_headers <- function(res) {
-    blocks <- curl::parse_headers(res$headers, multiple = TRUE)
-    h <- blocks[[length(blocks)]][-1]
-    setNames(sub("^[^:]+:\\s*", "", h), tolower(sub(":.*$", "", h)))
-  }
+  h <- http_handle()
+  con <- tryCatch(curl(url, open = "rb", handle = h), error = function(e) NULL)
   size <- NA_real_; name <- NA_character_; final_url <- url
-  res <- tryCatch(curl_fetch_memory(url, http_handle(nobody = TRUE)),
-                  error = function(e) NULL)
-  if (!is.null(res) && res$status_code < 400) {
-    h <- last_headers(res); final_url <- res$url
-    if (!is.na(h["content-length"])) size <- as.numeric(h["content-length"])
-    if (!is.na(h["content-disposition"])) name <- h["content-disposition"]
-  }
-  if (is.na(size)) {
-    # Some storage backends refuse HEAD; ask for one byte and read the total.
-    res <- tryCatch(curl_fetch_memory(url, http_handle(range = "0-0")),
-                    error = function(e) NULL)
-    if (!is.null(res)) {
-      h <- last_headers(res); final_url <- res$url
-      cr <- h["content-range"]
-      if (!is.na(cr)) size <- as.numeric(sub(".*/", "", cr))
-      if (is.na(name) && !is.na(h["content-disposition"])) name <- h["content-disposition"]
+  if (!is.null(con)) {
+    d <- handle_data(h)
+    close(con)
+    blocks <- curl::parse_headers(d$headers, multiple = TRUE)
+    hd <- blocks[[length(blocks)]][-1]
+    hd <- setNames(sub("^[^:]+:\\s*", "", hd), tolower(sub(":.*$", "", hd)))
+    final_url <- d$url
+    if (d$status_code < 400) {
+      if (!is.na(hd["content-length"])) size <- as.numeric(hd["content-length"])
+      if (!is.na(hd["content-disposition"])) name <- hd["content-disposition"]
+    } else {
+      message("Server answered HTTP ", d$status_code, " for ", url)
     }
   }
   if (!is.na(name)) {
