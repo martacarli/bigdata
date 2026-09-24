@@ -3,7 +3,7 @@
 # checks the numbers. No network needed. Run from the project folder:
 #   Rscript tests/smoke_test.R
 # The fixtures mimic the awkward parts of the real data: descriptions with
-# newlines, quotes and commas, a zipped release, duplicate SponsorBlock
+# newlines, quotes and commas, a zip holding a .tar.bz2 holding the CSV, duplicate SponsorBlock
 # submissions, hidden and downvoted segments, and whole-video labels.
 
 suppressPackageStartupMessages(library(data.table))
@@ -32,10 +32,18 @@ filler <- tr[rep(6, 300)][, `:=`(region_code = sample(c("GB", "FR", "DE"), .N, T
                                  video_id = sprintf("F%010d", .I),
                                  video_description = paste0("filler ", .I, "\nsecond line, \"q\""))]
 tr <- rbind(filler[1:150], tr, filler[151:300])
-csv <- file.path(tmp, "most_popular.csv")
-fwrite(tr, csv, quote = TRUE)
-other <- file.path(tmp, "README.txt"); writeLines("readme", other)
-old <- setwd(tmp); zip(file.path(raw, "trending_release.zip"), c("most_popular.csv", "README.txt"), flags = "-q"); setwd(old)
+# Same layout as the real release: a zip holding a .tar.bz2 holding the CSV,
+# next to other files, including a decoy with a similar name.
+rel <- file.path(tmp, "release"); inner <- file.path(tmp, "youtube_trends")
+dir.create(rel); dir.create(inner)
+fwrite(tr, file.path(inner, "most_popular.csv"), quote = TRUE)
+fwrite(tr[1:3][, region_code := "US"], file.path(inner, "old_most_popular.csv"))   # decoy
+writeLines("other table", file.path(inner, "channels.csv"))
+old <- setwd(tmp)
+system("tar -cjf release/youtube_trends.tar.bz2 youtube_trends/channels.csv youtube_trends/old_most_popular.csv youtube_trends/most_popular.csv")
+writeLines("dataset info", "release/dataset_info.txt")
+zip(file.path(raw, "trending_release.zip"), c("release/youtube_trends.tar.bz2", "release/dataset_info.txt"), flags = "-q")
+setwd(old)
 
 # ---- SponsorBlock fixtures (real column order) --------------------------------------
 sb_cols <- c("videoID", "startTime", "endTime", "votes", "locked", "incorrectVotes", "UUID",

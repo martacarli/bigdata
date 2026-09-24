@@ -128,6 +128,10 @@ count_quotes <- function(x) {
 stream_filter_csv <- function(con, filter_col, filter_value, keep_cols,
                               chunk_lines = CHUNK_LINES) {
   header_line <- readLines(con, n = 1L, warn = FALSE, encoding = "UTF-8")
+  if (!length(header_line) || !nzchar(header_line)) {
+    stop("Nothing came out of the archive. The file we need may have another name; ",
+         "check dataset_info.txt in the release.", call. = FALSE)
+  }
   header <- names(fread(text = c(header_line, ""), header = TRUE, sep = ","))
   cols <- resolve_columns(header)
   message("Header found: ", paste(header, collapse = ", "))
@@ -201,6 +205,28 @@ sniff_type <- function(path) {
   "csv"
 }
 
+# tar option that decompresses a tar archive given its file name. For .bz2,
+# lbzip2 (parallel) is used when installed because plain bzip2 is slow.
+tar_decompress_flag <- function(name) {
+  n <- tolower(name)
+  if (grepl("\\.(tar\\.bz2|tbz2?)$", n)) {
+    return(if (nzchar(Sys.which("lbzip2"))) "-I lbzip2" else "-j")
+  }
+  if (grepl("\\.(tar\\.gz|tgz)$", n)) return(if (nzchar(Sys.which("pigz"))) "-I pigz" else "-z")
+  if (grepl("\\.(tar\\.xz|txz)$", n)) return("-J")
+  ""
+}
+
+# Pull one CSV out of a tar stream in a single pass. Listing a compressed
+# tar first would mean decompressing it twice, so we match the member by
+# name pattern instead (the member at the top level or inside any folder).
+tar_member_cmd <- function(name, member) {
+  paste("tar -xO", tar_decompress_flag(name), "-f - --wildcards",
+        shQuote(member), shQuote(paste0("*/", member)))
+}
+
+is_tar_name <- function(x) grepl("\\.(tar|tar\\.gz|tgz|tar\\.bz2|tbz2?|tar\\.xz|txz)$", tolower(x))
+
 open_member_stream <- function(path, member) {
   p <- tolower(path)
   if (!grepl("\\.(zip|tar|tgz|gz|bz2|xz|7z|csv)$", p)) {
@@ -211,19 +237,31 @@ open_member_stream <- function(path, member) {
   if (grepl("\\.zip$", p)) {
     entries <- utils::unzip(path, list = TRUE)$Name   # reads the index only
     m <- entries[basename(entries) == member]
-    if (!length(m)) stop(member, " not in ", path, ". Entries: ", paste(entries, collapse = ", "))
-    message("Streaming '", m[1], "' out of ", basename(path))
-    # `unzip -p` handles zip64 (>4 GB) archives; fall back to R's unz().
-    if (nzchar(Sys.which("unzip"))) {
-      return(pipe(paste("unzip -p", shQuote(path), shQuote(m[1])), "r"))
+    if (length(m)) {
+      message("Streaming '", m[1], "' out of ", basename(path))
+      # `unzip -p` handles zip64 (>4 GB) archives; fall back to R's unz().
+      if (nzchar(Sys.which("unzip"))) {
+        return(pipe(paste("unzip -p", shQuote(path), shQuote(m[1])), "r"))
+      }
+      return(unz(path, m[1], "r"))
     }
-    return(unz(path, m[1], "r"))
+    # Not there directly: look inside a tar archive packed in the zip, e.g.
+    # release.zip -> youtube_trends.tar.bz2 -> most_popular.csv. Both layers
+    # are decompressed on the fly; nothing is written to disk.
+    inner <- entries[is_tar_name(entries)]
+    if (!length(inner)) stop(member, " not in ", path, ". Entries: ", paste(entries, collapse = ", "))
+    if (!nzchar(Sys.which("unzip"))) stop("Nested archive: needs the `unzip` command line tool.")
+    message("Streaming '", member, "' out of '", inner[1], "' inside ", basename(path),
+            " (one pass, nothing unpacked to disk)")
+    if (grepl("bz2$", inner[1]) && !nzchar(Sys.which("lbzip2"))) {
+      message("Tip: installing lbzip2 makes this faster (on Colab: system('apt-get -qq install -y lbzip2')).")
+    }
+    return(pipe(paste("unzip -p", shQuote(path), shQuote(inner[1]), "|",
+                      tar_member_cmd(inner[1], member)), "r"))
   }
-  if (grepl("\\.(tar|tar\\.gz|tgz|tar\\.bz2|tar\\.xz)$", p)) {
-    entries <- utils::untar(path, list = TRUE)
-    m <- entries[basename(entries) == member]
-    if (!length(m)) stop(member, " not in ", path)
-    return(pipe(paste("tar -xOf", shQuote(path), shQuote(m[1])), "r"))
+  if (is_tar_name(p)) {
+    message("Streaming '", member, "' out of ", basename(path))
+    return(pipe(paste("cat", shQuote(path), "|", tar_member_cmd(p, member)), "r"))
   }
   if (grepl("\\.7z$", p)) {
     if (!nzchar(Sys.which("7z"))) stop("7z archive: install 7-Zip and put `7z` on PATH.")
