@@ -64,6 +64,7 @@ YTSB_ALLOW_LARGE=TRUE Rscript 01_download.R
 I couldn't open the dataset documentation while writing these scripts, so a few things are guesses, and each one fails with a clear message:
 
 - **Column names.** `TRENDING_COLS` in `00_config.R` has a list of likely header names for each field. If 01 stops with "Could not find these columns", it also prints the real header. Add the right name to the list and run it again.
+- **Downloading the trending file in the browser.** If the script can't download it, download it yourself from the dataset page and put it in `data/raw/` without renaming or unzipping it. 01 then uses that file and still fetches the SponsorBlock files.
 - **Finding the download link.** 01 first tries the dataset's JSON listing and then falls back to scraping the page. If neither works, copy the download link of the file from the dataset page and run `YTSB_TRENDING_URL="<link>" Rscript 01_download.R`.
 - **Region values.** 01 prints the region values it finds in the first chunk. If the US is stored as something other than `US`, change `REGION` in `00_config.R`.
 - **Mirror file URLs.** The SponsorBlock files are downloaded from `https://sb.ltn.fi/database/<file>`. If the mirror has moved them, put the files in `data/raw/` yourself and run with `YTSB_OFFLINE=TRUE`.

@@ -78,8 +78,12 @@ list_databank_files <- function(dataset_url) {
            TRENDING_MEMBER, " and run again with YTSB_TRENDING_URL set to it.", call. = FALSE)
     }
     html <- rawToChar(res$content)
-    links <- regmatches(html, gregexpr("/datafiles/[A-Za-z0-9_-]+/download", html))[[1]]
-    urls <- paste0(base, unique(links))
+    # Any link pointing at a data file, relative or absolute.
+    links <- regmatches(html, gregexpr("(https?://[^\"' ]+)?/datafiles/[A-Za-z0-9_-]+(/download)?", html))[[1]]
+    links <- unique(sub("/download$", "", links))
+    if (length(links)) {
+      urls <- paste0(ifelse(grepl("^https?://", links), "", base), links, "/download")
+    }
   }
   if (!length(urls)) {
     stop("No data files found on ", dataset_url,
@@ -149,10 +153,13 @@ choose_trending_file <- function(files) {
 
 # ---- a) Trending dataset ----------------------------------------------------
 message("== Global YouTube Trending Dataset ==")
-if (OFFLINE) {
-  local <- list.files(RAW_DIR, full.names = FALSE)
-  local <- local[!grepl("^(sponsorTimes|videoInfo)|\\.part$", local)]
+# A trending file already in data/raw (e.g. downloaded in the browser) is
+# used as is, and nothing is fetched for it.
+local <- list.files(RAW_DIR, full.names = FALSE)
+local <- local[!grepl("^(sponsorTimes|videoInfo)|\\.part$", local)]
+if (OFFLINE || length(local)) {
   pick <- choose_trending_file(data.table(url = NA, name = local, size = NA))
+  message("Using the file already in ", RAW_DIR, ": ", pick$name)
 } else {
   files <- if (nzchar(TRENDING_URL_OVERRIDE)) remote_file_info(TRENDING_URL_OVERRIDE)
            else list_databank_files(TRENDING_DATASET_URL)
