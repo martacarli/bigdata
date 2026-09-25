@@ -148,54 +148,61 @@ choose_trending_file <- function(files) {
 }
 
 # ---- a) Trending dataset ----------------------------------------------------
-message("== Global YouTube Trending Dataset ==")
-# A trending file already in data/raw (e.g. downloaded in the browser) is
-# used as is, and nothing is fetched for it.
-local <- list.files(RAW_DIR, full.names = FALSE)
-local <- local[!grepl("^(sponsorTimes|videoInfo)|\\.part$", local)]
-if (OFFLINE || length(local)) {
-  pick <- choose_trending_file(data.table(url = NA, name = local, size = NA))
-  message("Using the file already in ", RAW_DIR, ": ", pick$name)
+# Skip all of part a) if an earlier run already saved the US rows (for
+# example when only the SponsorBlock step failed). YTSB_REEXTRACT=TRUE forces it.
+us_rds <- file.path(INTERIM_DIR, "us_trending_rows.rds")
+if (file.exists(us_rds) && !isTRUE(as.logical(Sys.getenv("YTSB_REEXTRACT", "FALSE")))) {
+  message("US rows already extracted earlier (", us_rds, "); skipping download and extraction.")
 } else {
-  files <- if (nzchar(TRENDING_URL_OVERRIDE)) remote_file_info(TRENDING_URL_OVERRIDE)
-           else list_databank_files(TRENDING_DATASET_URL)
-  message("Files in the release:")
-  print(files[, .(name, size = fmt_gb(size))])
-  pick <- choose_trending_file(files)
-  # Links like ".../get" give no usable file name; use a fixed one.
-  if (is.na(pick$name) || !nzchar(pick$name) || pick$name %in% c("get", "download")) {
-    pick$name <- "trending_release"
+  message("== Global YouTube Trending Dataset ==")
+  # A trending file already in data/raw (e.g. downloaded in the browser) is
+  # used as is, and nothing is fetched for it.
+  local <- list.files(RAW_DIR, full.names = FALSE)
+  local <- local[!grepl("^(sponsorTimes|videoInfo)|\\.part$", local)]
+  if (OFFLINE || length(local)) {
+    pick <- choose_trending_file(data.table(url = NA, name = local, size = NA))
+    message("Using the file already in ", RAW_DIR, ": ", pick$name)
+  } else {
+    files <- if (nzchar(TRENDING_URL_OVERRIDE)) remote_file_info(TRENDING_URL_OVERRIDE)
+             else list_databank_files(TRENDING_DATASET_URL)
+    message("Files in the release:")
+    print(files[, .(name, size = fmt_gb(size))])
+    pick <- choose_trending_file(files)
+    # Links like ".../get" give no usable file name; use a fixed one.
+    if (is.na(pick$name) || !nzchar(pick$name) || pick$name %in% c("get", "download")) {
+      pick$name <- "trending_release"
+    }
+    message("Chosen: ", pick$name, " (", fmt_gb(pick$size), ")")
+    if (LIST_ONLY) {
+      sb <- rbindlist(lapply(paste0(SB_MIRROR_URL, SB_FILES), remote_file_info))
+      message("SponsorBlock files:")
+      print(sb[, .(name, size = fmt_gb(size))])
+      message("List-only mode: nothing downloaded.")
+      # Stop here. In RStudio this ends source() without closing R.
+      if (interactive()) invokeRestart("abort") else quit(save = "no")
+    }
+    check_size(pick$size, pick$name)
+    download_resumable(pick$url, file.path(RAW_DIR, pick$name), pick$size)
   }
-  message("Chosen: ", pick$name, " (", fmt_gb(pick$size), ")")
-  if (LIST_ONLY) {
-    sb <- rbindlist(lapply(paste0(SB_MIRROR_URL, SB_FILES), remote_file_info))
-    message("SponsorBlock files:")
-    print(sb[, .(name, size = fmt_gb(size))])
-    message("List-only mode: nothing downloaded.")
-    # Stop here. In RStudio this ends source() without closing R.
-    if (interactive()) invokeRestart("abort") else quit(save = "no")
-  }
-  check_size(pick$size, pick$name)
-  download_resumable(pick$url, file.path(RAW_DIR, pick$name), pick$size)
-}
-trending_path <- file.path(RAW_DIR, pick$name)
+  trending_path <- file.path(RAW_DIR, pick$name)
 
-keep_cols <- c("snapshot_time", "region", "rank", "video_id", "title", "description",
-               "channel_title", "channel_id", "category", "views")
-duck <- get_duckdb()
-if (!is.na(duck)) {
-  us_rows <- extract_rows_duckdb(duck, member_stream_parts(trending_path, TRENDING_MEMBER),
-                                 "region", REGION, keep_cols,
-                                 file.path(INTERIM_DIR, "us_trending_rows.csv"))
-  file.remove(file.path(INTERIM_DIR, "us_trending_rows.csv"))
-} else {
-  con <- open_member_stream(trending_path, TRENDING_MEMBER)
-  us_rows <- tryCatch(stream_filter_csv(con, "region", REGION, keep_cols),
-                      finally = close(con))
+  keep_cols <- c("snapshot_time", "region", "rank", "video_id", "title", "description",
+                 "channel_title", "channel_id", "category", "views")
+  duck <- get_duckdb()
+  if (!is.na(duck)) {
+    us_rows <- extract_rows_duckdb(duck, member_stream_parts(trending_path, TRENDING_MEMBER),
+                                   "region", REGION, keep_cols,
+                                   file.path(INTERIM_DIR, "us_trending_rows.csv"))
+    file.remove(file.path(INTERIM_DIR, "us_trending_rows.csv"))
+  } else {
+    con <- open_member_stream(trending_path, TRENDING_MEMBER)
+    us_rows <- tryCatch(stream_filter_csv(con, "region", REGION, keep_cols),
+                        finally = close(con))
+  }
+  if (!nrow(us_rows)) stop("No rows with region == '", REGION, "'. See the region values printed above.")
+  message(sprintf("Kept %s %s rows.", format(nrow(us_rows), big.mark = ","), REGION))
+  saveRDS(us_rows, file.path(INTERIM_DIR, "us_trending_rows.rds"))
 }
-if (!nrow(us_rows)) stop("No rows with region == '", REGION, "'. See the region values printed above.")
-message(sprintf("Kept %s %s rows.", format(nrow(us_rows), big.mark = ","), REGION))
-saveRDS(us_rows, file.path(INTERIM_DIR, "us_trending_rows.rds"))
 
 # ---- b) SponsorBlock ---------------------------------------------------------
 message("== SponsorBlock ==")

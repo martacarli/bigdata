@@ -108,4 +108,12 @@ check(mt[video_id == "CCCCCCCCCCC", full_video_label], "C: whole-video label cou
 check(any(grepl("present in SponsorBlock at all: +3 ", rep)), "coverage: 3 of 4 videos in SponsorBlock")
 check(identical(md5_before, tools::md5sum(list.files(raw, full.names = TRUE))),
       "raw files unchanged (same names and checksums)")
+
+# Re-running step 1 after the big file is gone (a fresh Colab session keeps
+# nothing, but a resumed one may keep data/interim) must skip, not re-download.
+Sys.chmod(file.path(raw, "trending_release.zip"), "0644"); file.remove(file.path(raw, "trending_release.zip"))
+rerun <- system2("Rscript", "01_download.R", env = env, stdout = TRUE, stderr = TRUE)
+check(is.null(attr(rerun, "status")) && any(grepl("skipping download and extraction", rerun)),
+      "re-running step 1 skips when US rows are already saved")
+
 cat("\nAll checks passed. Output in", out, "\n")
