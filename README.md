@@ -88,3 +88,117 @@ tests/smoke_test.R
 ## Submission
 
 Following the course protocol, zip this folder as `20564 – Group Project – Group XX.zip` (use two digits, e.g. `Group 05`), or `20564 – Individual Project – Last First.zip` if you are a non-attending student. Leave `data/` out of the zip.
+
+---
+
+# Part 2: Sponsored videos dataset
+
+Research question: do sponsored YouTube videos keep gaining views for longer than unsponsored videos from the same creators, and do bigger sponsored videos cause bigger short-term jumps in public interest in the sponsoring brand? The scripts below only build the data. No models are fitted here.
+
+## Scripts
+
+- `sponsor_utils.R` has the settings (dates, thresholds, quota limit, user agent) and the helper functions. The other two scripts load it.
+- `sponsor_pipeline.R` builds the dataset one stage at a time: `Rscript sponsor_pipeline.R <stage>`.
+- `poll_views.R` is the daily job that records view curves.
+- `channel_seeds.csv` is my hand-picked list of channel handles (see "Channel selection rule").
+- `tests/smoke_test_sponsor.R` runs every stage on fake API responses, so it needs no internet and no key.
+
+## Setup
+
+1. Packages: `install.packages(c("data.table", "httr2", "jsonlite", "gtrendsR"))`. Running `Rscript sponsor_pipeline.R check` installs any that are missing and reports what's there.
+2. Put the YouTube key in `~/.Renviron` as `YT_API_KEY=...` and restart R. The scripts send it as a request header (never in the URL), and they remove it from any error message before printing. Nothing writes it to a file.
+3. The SponsorBlock and Wikipedia requests send a User-Agent with the contact email from `SPONSOR_CONTACT_EMAIL` (default marta.carli@studbocconi.it).
+
+## Run order
+
+```
+Rscript sponsor_pipeline.R check
+Rscript sponsor_pipeline.R candidates        # writes channels_candidates.csv, then review it
+Rscript sponsor_pipeline.R channels          # channels.csv = the rows with selected == TRUE
+
+# test on 5 random channels first, in a separate folder
+SPONSOR_TEST_N=5 SPONSOR_DATA_DIR=data/test Rscript sponsor_pipeline.R videos
+SPONSOR_TEST_N=5 SPONSOR_DATA_DIR=data/test Rscript sponsor_pipeline.R label
+
+Rscript sponsor_pipeline.R videos
+Rscript sponsor_pipeline.R label
+Rscript sponsor_pipeline.R handcheck
+Rscript sponsor_pipeline.R brand_candidates  # then write brands.csv by hand, then review it
+Rscript sponsor_pipeline.R events
+Rscript sponsor_pipeline.R panel             # slow: Google Trends, 8 to 15 s between calls
+Rscript sponsor_pipeline.R comments          # may need several days of quota
+Rscript sponsor_pipeline.R summary
+Rscript poll_views.R                         # every day, from cron
+```
+
+You can stop any stage and run it again. YouTube responses are kept in `data/raw/`, and SponsorBlock, Wikipedia, Trends and comment counts are cached in `data/cache/`. A rerun reads those files back and skips the API call. If the daily quota runs out partway through a stage, it saves what it has and stops; running it again the next day continues from there.
+
+## Quota
+
+The scripts only call the `videos`, `playlistItems`, `channels` and `commentThreads` endpoints, and never `search`. Each call costs 1 unit. Every call is logged in `data/quota_log.csv` (quota_day, time_utc, endpoint, units, script). Before each call the script checks that today's total stays under 8,000. "Today" is the Pacific-time date, because that's when YouTube resets the quota. Rough costs:
+
+| step | units |
+|---|---|
+| candidates | about 250 handles + 96 chart pages + 10 |
+| videos | about 1 per 50 uploads per channel, plus 1 per 50 videos: about 1,500 |
+| poll_views.R | about 300 a day |
+| comments | up to 5 per sponsored video, which is the step that takes several days |
+
+## Channel selection rule
+
+`search` costs 100 units, so channels come from two cheap sources:
+
+1. `channel_seeds.csv`: 242 handles across the five categories that I picked by hand as English-language creators likely to run sponsor reads. Each handle is looked up with `channels?forHandle=`. Handles that don't exist are skipped.
+2. The `mostPopular` video chart for categories 28 (tech), 27 (science and education), 20 (gaming), 26 and 22 (lifestyle) and 24 (commentary), in the US, GB, CA and AU, 4 pages each. Each channel gets the category that most of its chart videos had.
+
+A channel is **eligible** if it has 100,000 to 2,000,000 subscribers (not hidden), is not made for kids, has at least 20 videos, and looks English-language. For seeds that means the country is one of US, GB, CA, AU, IE or NZ, or empty. For chart channels it means the country is in that list, or the country is empty and the channel's default language, or most of its chart videos' audio, is English. At most 50 eligible channels per category are **selected**; where a category has more, 50 are drawn at random with `set.seed(20564)`.
+
+## Data files
+
+Everything collected goes into `data/` (this folder is not in git). The hand-edited files `channel_seeds.csv`, `channels_candidates.csv`, `channels.csv` and `brands.csv` live next to the scripts, so they are in git.
+
+| file | one row per | columns |
+|---|---|---|
+| `channels_candidates.csv` | channel looked up | channel_id, title, handle, subscriber_count, category, selected, eligible, source, country, default_language, video_count, view_count, made_for_kids, topics |
+| `channels.csv` | panel channel | channel_id, title, handle, subscriber_count, category |
+| `data/videos.csv` | video since 2025-01-01, longer than 60 s | video_id, channel_id, channel_title, title, description, published_at, category_id, language, duration_sec, views, likes, comments, retrieved_at |
+| `data/description_links.csv` | link in a description | video_id, url, domain |
+| `data/videos_labelled.csv` | video at least 14 days old | the videos.csv columns plus sb_sponsored, sb_full_video, sb_n_segments, sb_ad_seconds, sb_first_start, sb_ad_share, sb_ad_position, desc_sponsor_text, desc_patterns, promo_code, sponsored, label_source, labelled_on |
+| `data/handcheck_unsponsored.csv` | sampled "neither" video | video_id, url, title, ad_found |
+| `data/brand_candidates.csv` | domain linked from sponsored videos | domain, n_videos, n_channels, example_url, n_videos_unsponsored, shortener |
+| `brands.csv` | sponsor brand | domain, brand, wiki_article, trends_term, youtube_channel_id, unsure |
+| `data/sponsor_events.csv` | sponsored video x brand | event_id, video_id, brand, channel_id, channel_title, title, published_at, upload_day, views, likes, comments, duration_sec, sb_ad_seconds, sb_ad_share, sb_ad_position, label_source, promo_code, brand_n_events, rare_brand, n_overlapping, wiki_article, trends_term, unsure |
+| `data/brand_event_panel.csv` | event x day, rel_day -28 to 28 | event_id, video_id, brand, date, rel_day, wiki_views, trends_web, trends_youtube, channel_id, upload_day, views, likes, comments, duration_sec, sb_ad_seconds, sb_ad_share, sb_ad_position, label_source, brand_n_events, rare_brand, n_overlapping |
+| `data/comment_mentions.csv` | event (video x brand) | video_id, brand, n_comments_fetched, n_mentions, share_mentions, comments_status |
+| `data/views_panel.csv` | video x poll day | poll_date, video_id, channel_id, published_at, age_days, views, likes, comments, retrieved_at |
+| `data/channel_panel.csv` | channel x poll day | poll_date, channel_id, subscriber_count, view_count, video_count, retrieved_at |
+| `data/quota_log.csv` | API call | quota_day, time_utc, endpoint, units, script |
+
+### How the labels are built
+
+- **SponsorBlock** (`sponsor.ajay.app/api/skipSegments`, category `sponsor`, action types skip, mute and full). There is one call per video with a pause between calls, and each answer is cached in `data/cache/sponsorblock/`. A 404 means nobody submitted a sponsor segment, so it counts as `sb_sponsored = FALSE`. Overlapping segments are merged before counting, because several users often submit the same read. A whole-video label ("full") makes the video sponsored but adds no seconds, and its `sb_ad_position` is `full_video`. Position: `early` if the first ad starts in the first 15% of the video, `middle` if it starts before 60%, `late` otherwise.
+- **Description**: `desc_sponsor_text` is TRUE if the description matches any pattern in `SPONSOR_PATTERNS` in `sponsor_utils.R` ("sponsored by", "thanks to ... for sponsoring", "today's sponsor", "this video is sponsored", "use code", "promo/coupon/discount code", "paid promotion", "#ad", "#sponsored"). `desc_patterns` lists which ones matched.
+- `sponsored = sb_sponsored OR desc_sponsor_text`. `label_source` is `both`, `sponsorblock_only`, `description_only` or `neither`, and NA if the SponsorBlock call failed (those are retried on the next run).
+- **Links**: every http(s) link in each description, minus social media, link hubs, and Patreon-type pages (the list is `EXCLUDED_DOMAINS`). Link shorteners are kept in `description_links.csv` but flagged in `brand_candidates.csv`.
+
+### Brand attention panel
+
+- `wiki_views`: daily English Wikipedia pageviews (all-access, user agents only), one request per brand covering every one of its event windows. The API leaves out days with zero views, so those are filled with 0. Days after yesterday are NA.
+- `trends_web` and `trends_youtube`: Google Trends for `trends_term` in `TRENDS_GEO` (default GB), with one query per event window, because Trends rescales every query to 0 to 100. "<1" is stored as 0.5. Events with rare_brand and no overlap are queried first. On HTTP 429 the script waits 2, 4 and then 8 minutes. If Trends still refuses, it stops and keeps what it has. A window that ends less than 3 days ago is skipped until a later run.
+- `comment_mentions.csv`: up to 500 top-level comments per sponsored video, in relevance order. A comment counts if it contains the brand name or the description's promo code as a whole word, case-insensitive. Only the counts are stored. The comment text is matched in memory and never written anywhere, and the commentThreads responses are not saved to `data/raw/`.
+
+## Daily polling with cron (macOS)
+
+Not set up yet. When you want it, run `crontab -e` and add one line (change the path):
+
+```
+15 9 * * * cd "/Users/YOU/path/to/bigdata" && /usr/local/bin/Rscript poll_views.R >> data/poll.log 2>&1
+```
+
+Use `which Rscript` to get the right path (on Apple Silicon it's usually `/opt/homebrew/bin/Rscript` or `/Library/Frameworks/R.framework/Resources/bin/Rscript`). Cron doesn't read `~/.Renviron` through your shell, but R itself does at startup, so the key still gets picked up. The Mac has to be awake at that time. If it's often asleep, `launchd` with `StartCalendarInterval` catches up on a missed run, while cron just skips it. You also have to give `cron` Full Disk Access in System Settings, Privacy & Security if the project sits in Documents or Desktop.
+
+## Data collection log
+
+| date | what was done | channels | videos | events | brands | quota used | notes |
+|---|---|---|---|---|---|---|---|
+| 2026-10-04 | Wrote sponsor_utils.R, sponsor_pipeline.R, poll_views.R, channel_seeds.csv and the offline test. Ran the `check` stage. | 0 | 0 | 0 | 0 | 0 | Nothing collected yet. In the cloud sandbox YT_API_KEY was not set, gtrendsR could not be installed (CRAN blocked), and sponsor.ajay.app, wikimedia.org and trends.google.com were blocked by the network policy. The offline test (`tests/smoke_test_sponsor.R`) passes. |
