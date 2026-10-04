@@ -161,7 +161,7 @@ Everything collected goes into `data/` (this folder is not in git). The hand-edi
 |---|---|---|
 | `channels_candidates.csv` | channel looked up | channel_id, title, handle, subscriber_count, category, selected, eligible, source, country, default_language, video_count, view_count, made_for_kids, topics |
 | `channels.csv` | panel channel | channel_id, title, handle, subscriber_count, category |
-| `data/videos.csv` | video since 2025-01-01, longer than 60 s | video_id, channel_id, channel_title, title, description, published_at, category_id, language, duration_sec, views, likes, comments, retrieved_at |
+| `data/videos.csv` | video since 2025-01-01, longer than 60 s | video_id, channel_id, channel_title, title, description, published_at, category_id, language, duration_sec, views, likes, comments, retrieved_at, maybe_short (61 to 180 s: could still be a Short, since Shorts can now run 3 minutes) |
 | `data/description_links.csv` | link in a description | video_id, url, domain |
 | `data/videos_labelled.csv` | video at least 14 days old | the videos.csv columns plus sb_sponsored, sb_full_video, sb_n_segments, sb_ad_seconds, sb_first_start, sb_ad_share, sb_ad_position, desc_sponsor_text, desc_patterns, promo_code, sponsored, label_source, labelled_on |
 | `data/handcheck_unsponsored.csv` | sampled "neither" video | video_id, url, title, ad_found |
@@ -202,3 +202,4 @@ Use `which Rscript` to get the right path (on Apple Silicon it's usually `/opt/h
 | date | what was done | channels | videos | events | brands | quota used | notes |
 |---|---|---|---|---|---|---|---|
 | 2026-10-04 | Wrote sponsor_utils.R, sponsor_pipeline.R, poll_views.R, channel_seeds.csv and the offline test. Ran the `check` stage. | 0 | 0 | 0 | 0 | 0 | Nothing collected yet. In the cloud sandbox YT_API_KEY was not set, gtrendsR could not be installed (CRAN blocked), and sponsor.ajay.app, wikimedia.org and trends.google.com were blocked by the network policy. The offline test (`tests/smoke_test_sponsor.R`) passes. |
+| 2026-10-04 | Tested the API key header against YouTube with a dummy key: the header is read as the key. Added a stop when the key is invalid or restricted (before, every channel would have come back as "not found"). Added maybe_short to videos.csv. | 0 | 0 | 0 | 0 | 0 | Still no key or network access in the sandbox, so collection moves to the Mac. |

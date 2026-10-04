@@ -152,6 +152,14 @@ yt_get <- function(endpoint, params, raw_subdir = NULL, raw_name = NULL, use_raw
     reason <- tryCatch(body$error$errors[[1]]$reason, error = function(e) NULL)
     msg <- tryCatch(body$error$message, error = function(e) NULL)
     if (identical(reason, "quotaExceeded")) stop(quota_exceeded())
+    # A bad, restricted or disabled key fails every call the same way. Stop
+    # instead of treating it as "channel not found" for the whole panel.
+    fatal <- c("keyInvalid", "keyExpired", "accessNotConfigured", "ipRefererBlocked",
+               "forbidden", "dailyLimitExceeded", "rateLimitExceeded", "SERVICE_DISABLED")
+    if ((!is.null(reason) && reason %in% fatal && endpoint != "commentThreads") ||
+        grepl("API key|API_KEY|has not been used in project|unregistered callers", msg %||% ""))
+      stop("YouTube API refused the request (", resp_status(resp), ", ", reason %||% "no reason", "): ",
+           scrub(msg %||% ""), call. = FALSE)
     # Comments switched off or video gone: not an error for our purposes.
     return(list(.error = TRUE, status = resp_status(resp),
                 reason = if (is.null(reason)) NA_character_ else reason,

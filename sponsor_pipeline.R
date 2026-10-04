@@ -151,6 +151,9 @@ stage_videos <- function() {
   n0 <- nrow(vids)
   vids <- vids[!is.na(duration_sec) & duration_sec > MIN_DURATION & live == "none"]
   vids[, live := NULL]
+  # Since Oct 2024 Shorts can run up to 3 minutes and the API does not say
+  # which videos are Shorts. We keep the 60 s rule but flag the grey zone.
+  vids[, maybe_short := duration_sec <= 180]
   setorder(vids, channel_id, published_at)
   fwrite(vids, dpath("videos.csv"))
   say("Wrote data/videos.csv: ", nrow(vids), " videos (dropped ", n0 - nrow(vids),
