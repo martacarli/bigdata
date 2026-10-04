@@ -66,6 +66,21 @@ MP_CATEGORY_MAP <- c("28" = "tech", "27" = "science_education", "20" = "gaming",
                      "26" = "lifestyle", "22" = "lifestyle", "24" = "commentary")
 MP_REGIONS <- c("US", "GB", "CA", "AU")
 
+# Latest 50 uploads since SINCE_DATE: how many are long-form (> 3 min, so
+# certainly not Shorts), what share of those has English audio, and what share
+# has sponsor wording in the description.
+screen_channel <- function(channel_id) {
+  up <- channel_uploads(channel_id, raw_tag = "screen_", max_pages = 1)
+  v <- if (nrow(up)) video_details(up$video_id, raw_subdir = "screen_videos") else NULL
+  if (is.null(v) || !nrow(v)) return(data.table(channel_id = channel_id, n_long_recent = 0L,
+                                                en_share = NA_real_, sponsor_share = 0))
+  v <- v[duration_sec > 180 & live == "none"]
+  lang <- v$language[!is.na(v$language)]
+  data.table(channel_id = channel_id, n_long_recent = nrow(v),
+             en_share = if (length(lang)) mean(grepl("^en", lang)) else NA_real_,
+             sponsor_share = if (nrow(v)) mean(rowSums(desc_sponsor_flags(v$description)) > 0) else 0)
+}
+
 stage_candidates <- function() {
   check_user_agent(); yt_key()
   seeds <- read_csv(SEEDS_FILE)
@@ -92,19 +107,49 @@ stage_candidates <- function() {
 
   cand <- rbindlist(list(seed_rows, mp_rows), fill = TRUE)
   cand <- unique(cand, by = "channel_id")
-  cand[, english := fifelse(source == "seed", is.na(country) | country %in% EN_COUNTRIES,
-                            country %in% EN_COUNTRIES | (is.na(country) & grepl("^en", default_language)) |
-                              (is.na(country) & !is.na(en_audio) & en_audio > 0.5))]
-  cand[, eligible := !hidden_subs & between(subscriber_count, SUBS_RANGE[1], SUBS_RANGE[2]) &
-         english & !made_for_kids & video_count >= 20]
+  cand[, basic_ok := !hidden_subs & between(subscriber_count, SUBS_RANGE[1], SUBS_RANGE[2]) &
+         !made_for_kids & video_count >= 20]
+  cand[is.na(basic_ok), basic_ok := FALSE]
+
+  # Screen every channel that passes the basic rule on its 50 latest uploads
+  # (2 units per channel, saved in data/raw/ like everything else).
+  todo <- cand[basic_ok == TRUE, channel_id]
+  say("Screening ", length(todo), " channels on their latest uploads")
+  scr <- list()
+  ok <- with_quota({
+    for (i in seq_along(todo)) {
+      scr[[i]] <- screen_channel(todo[i])
+      if (i %% 100 == 0) say("  screened ", i, "/", length(todo))
+    }
+    TRUE
+  })
+  if (isFALSE(ok)) { say("Quota ran out while screening; run candidates again tomorrow."); return(invisible()) }
+  cand <- merge(cand, rbindlist(scr), by = "channel_id", all.x = TRUE)
+
+  # English: most recent long uploads have English audio. If the channel never
+  # sets an audio language, fall back to the country.
+  cand[, english := fifelse(!is.na(en_share), en_share >= 0.5,
+                            country %in% EN_COUNTRIES | (is.na(country) & grepl("^en", default_language)))]
+  cand[, eligible := basic_ok & english & n_long_recent >= MIN_LONG_RECENT & sponsor_share >= MIN_SPONSOR_SHARE]
   cand[is.na(eligible), eligible := FALSE]
-  # Up to N_PER_CATEGORY per category; if a category has more, draw at random.
-  cand[, r := sample(.N), by = .(category, eligible)]
-  cand[, selected := eligible & r <= N_PER_CATEGORY]
-  cand[, r := NULL]
+
+  # Hand-picked seeds first; mostPopular channels fill each category up to
+  # N_PER_CATEGORY, drawn at random (set.seed above) when there are more.
+  cand[, r := sample(.N), by = .(category, eligible, source)]
+  cand[, is_seed := source == "seed"]
+  setorder(cand, category, -eligible, -is_seed, r)
+  # Equal caps per category; slots a small category cannot fill go to the
+  # others (the cap rises until about TARGET_CHANNELS are selected).
+  n_elig <- cand[eligible == TRUE, .N, by = category]
+  cap <- N_PER_CATEGORY
+  while (sum(pmin(n_elig$N, cap)) < TARGET_CHANNELS && cap < max(n_elig$N)) cap <- cap + 1L
+  cand[, selected := eligible & cumsum(eligible) <= cap, by = category]
+  say("Cap per category: ", cap)
+  cand[, c("r", "is_seed") := NULL]
   setorder(cand, -selected, category, -subscriber_count)
   keep <- c("channel_id", "title", "handle", "subscriber_count", "category", "selected", "eligible",
-            "source", "country", "default_language", "video_count", "view_count", "made_for_kids", "topics")
+            "source", "country", "default_language", "video_count", "view_count", "made_for_kids",
+            "n_long_recent", "en_share", "sponsor_share", "topics")
   fwrite(cand[, ..keep], CANDIDATES_FILE)
   say("Wrote ", CANDIDATES_FILE, ": ", nrow(cand), " channels looked up, ", cand[, sum(eligible)],
       " eligible, ", cand[, sum(selected)], " selected")

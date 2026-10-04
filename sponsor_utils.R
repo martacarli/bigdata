@@ -43,9 +43,12 @@ MIN_DURATION    <- 60      # seconds; videos this short or shorter are Shorts
 MIN_AGE_LABEL   <- 14      # days; only label videos at least this old
 POLL_WINDOW     <- 60      # days; poll_views.R follows uploads this recent
 SUBS_RANGE      <- c(1e5, 2e6)
-N_PER_CATEGORY  <- 50      # 5 categories x 50 = about 250 channels
+N_PER_CATEGORY  <- 50      # starting cap per category
+TARGET_CHANNELS <- 250     # the cap is raised until about this many are selected
 CATEGORIES      <- c("tech", "science_education", "gaming", "lifestyle", "commentary")
 EN_COUNTRIES    <- c("US", "GB", "CA", "AU", "IE", "NZ")
+MIN_LONG_RECENT <- 6       # long-form (> 3 min) uploads since SINCE_DATE among the latest 50
+MIN_SPONSOR_SHARE <- 0.001 # i.e. at least one of those with sponsor wording in the description
 EVENT_WINDOW    <- 28      # days before and after upload
 RARE_MAX        <- 3       # rare_brand if the brand has this many events or fewer
 MAX_COMMENTS    <- 500     # top-level comments per video (5 pages of 100)

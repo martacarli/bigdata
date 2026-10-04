@@ -139,7 +139,7 @@ The scripts only call the `videos`, `playlistItems`, `channels` and `commentThre
 
 | step | units |
 |---|---|
-| candidates | about 250 handles + 96 chart pages + 10 |
+| candidates | about 340 handles + 80 chart pages + 2 per screened channel: about 2,250 |
 | videos | about 1 per 50 uploads per channel, plus 1 per 50 videos: about 1,500 |
 | poll_views.R | about 300 a day |
 | comments | up to 5 per sponsored video, which is the step that takes several days |
@@ -148,10 +148,17 @@ The scripts only call the `videos`, `playlistItems`, `channels` and `commentThre
 
 `search` costs 100 units, so channels come from two cheap sources:
 
-1. `channel_seeds.csv`: 242 handles across the five categories that I picked by hand as English-language creators likely to run sponsor reads. Each handle is looked up with `channels?forHandle=`. Handles that don't exist are skipped.
-2. The `mostPopular` video chart for categories 28 (tech), 27 (science and education), 20 (gaming), 26 and 22 (lifestyle) and 24 (commentary), in the US, GB, CA and AU, 4 pages each. Each channel gets the category that most of its chart videos had.
+1. `channel_seeds.csv`: 340 handles I picked by hand, English-language creators in the five categories who are likely to run sponsor reads. Each one is looked up with `channels?forHandle=`. Handles that don't exist are skipped.
+2. The `mostPopular` video chart for categories 28 (tech), 20 (gaming), 26 and 22 (lifestyle) and 24 (commentary), in the US, GB, CA and AU, with 4 pages each. Each channel gets the category that most of its chart videos had. There's no chart for category 27 (education), so science and education come only from seeds.
 
-A channel is **eligible** if it has 100,000 to 2,000,000 subscribers (not hidden), is not made for kids, has at least 20 videos, and looks English-language. For seeds that means the country is one of US, GB, CA, AU, IE or NZ, or empty. For chart channels it means the country is in that list, or the country is empty and the channel's default language, or most of its chart videos' audio, is English. At most 50 eligible channels per category are **selected**; where a category has more, 50 are drawn at random with `set.seed(20564)`.
+A channel is **eligible** if all of these hold:
+
+- 100,000 to 2,000,000 subscribers (not hidden), not made for kids, at least 20 videos.
+- Among its 50 latest uploads since 2025-01-01, at least 6 are long-form (over 3 minutes, so certainly not Shorts).
+- At least half of those long videos with an audio language set have English audio. If the channel never sets one, its country has to be US, GB, CA, AU, IE or NZ.
+- At least one of those long videos has sponsor wording in the description. This is on purpose: the research question compares sponsored and unsponsored videos from the same creator, so a creator who never runs sponsors adds nothing to that comparison.
+
+**Selection.** Hand-picked seeds come first, then chart channels drawn at random with `set.seed(20564)`. Every category gets the same cap, starting at 50. Commentary and science/education have fewer eligible channels than that, so the cap rises until about 250 channels are selected in total (it ended at 66).
 
 ## Data files
 
@@ -203,3 +210,4 @@ Use `which Rscript` to get the right path (on Apple Silicon it's usually `/opt/h
 |---|---|---|---|---|---|---|---|
 | 2026-10-04 | Wrote sponsor_utils.R, sponsor_pipeline.R, poll_views.R, channel_seeds.csv and the offline test. Ran the `check` stage. | 0 | 0 | 0 | 0 | 0 | Nothing collected yet. In the cloud sandbox YT_API_KEY was not set, gtrendsR could not be installed (CRAN blocked), and sponsor.ajay.app, wikimedia.org and trends.google.com were blocked by the network policy. The offline test (`tests/smoke_test_sponsor.R`) passes. |
 | 2026-10-04 | Tested the API key header against YouTube with a dummy key: the header is read as the key. Added a stop when the key is invalid or restricted (before, every channel would have come back as "not found"). Added maybe_short to videos.csv. | 0 | 0 | 0 | 0 | 0 | Still no key or network access in the sandbox, so collection moves to the Mac. |
+| 2026-10-04 | Step 2: built channels_candidates.csv. A first pass with only the subscriber and country rules picked many Shorts, clip and reupload channels from the charts, so I added screening on recent uploads (long-form, English audio, at least one sponsor-worded description) and 98 more seeds for commentary and science/education. | 252 selected of 295 eligible (1,583 looked up) | 0 | 0 | 0 | 2,253 | Category 27 has no mostPopular chart. 47 seed handles did not resolve. Commentary (21) and science/education (33) are below the 50 cap. Waiting for review before writing channels.csv. |
